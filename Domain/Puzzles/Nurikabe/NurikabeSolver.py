@@ -1,6 +1,4 @@
-﻿from typing import Set
-
-from z3 import Solver, Bool, Not, And, Or, Implies, is_true, sat
+﻿from z3 import Solver, Not, And, Or, Implies, sat, If, Sum, Int
 
 from Domain.Board.Direction import Direction
 from Domain.Board.Grid import Grid
@@ -16,47 +14,40 @@ class NurikabeSolver(GameSolver):
         self.columns_number = self._grid.columns_number
         if self.rows_number < 5 or self.columns_number < 5:
             raise ValueError("The grid must be at least 5x5")
-        self.islands_area = [cell for row in self._grid.matrix for cell in row if cell > 0]
-        self.island_count = len(self.islands_area)
-        self.islands_area_position = [Position(r, c) for r in range(self.rows_number) for c in range(self.columns_number) if self._grid.value(r, c) > 0]
+        self.islands_size = [self._grid.value(r, c) for r in range(self.rows_number) for c in range(self.columns_number) if self._grid.value(r, c) > 0]
+        self.island_count = len(self.islands_size)
+        self.islands_size_position = [Position(r, c) for r in range(self.rows_number) for c in range(self.columns_number) if self._grid.value(r, c) > 0]
         self._solver = Solver()
         self._grid_z3 = None
+        self._previous_solution = None
 
     def get_solution(self) -> (Grid, int):
-        self._grid_z3 = Grid([[Bool(f"grid_{r}_{c}") for c in range(self.columns_number)] for r in range(self.rows_number)])
-        # True if a cell is black (river), False if white (island)
+        self._grid_z3 = Grid([[Int(f"grid_{r}_{c}") for c in range(self.columns_number)] for r in range(self.rows_number)])
+        # 0 for a cell is black (river), > 0 for white (island)
         self._add_constraints()
-        solution = self._ensure_all_black_connected_and_no_island_without_number()
+        solution = self._ensure_all_rivers_connected_and_no_island_without_number()
         return solution
 
     def get_other_solution(self):
         self._exclude_solution(self._previous_solution)
-        return self._ensure_all_black_connected_and_no_island_without_number()
+        return self._ensure_all_rivers_connected_and_no_island_without_number()
 
     def _exclude_solution(self, solution):
         rivers_cells = solution.get_all_shapes(1)
-        self._solver.add(Not(And([self._grid_z3[river_cell] for river_cells in rivers_cells for river_cell in river_cells])))
+        self._solver.add(Not(And([self._grid_z3[river_cell] == 0 for river_cells in rivers_cells for river_cell in river_cells])))
 
-    def _ensure_all_black_connected_and_no_island_without_number(self):
+    def _ensure_all_rivers_connected_and_no_island_without_number(self):
         proposition_count = 0
         while self._solver.check() == sat:
             model = self._solver.model()
             proposition_count += 1
-            current_grid = Grid([[1 if is_true(model.eval(self._grid_z3[Position(i, j)])) else 0 for j in range(self.columns_number)] for i in range(self.rows_number)])
+            current_grid = Grid([[1 if (model.eval(self._grid_z3[Position(i, j)])).as_long() == 0 else 0 for j in range(self.columns_number)] for i in range(self.rows_number)])
             river_compliant = current_grid.are_cells_connected(1)
-            islands = current_grid.get_all_shapes(0)
-            if self._recompute_islands_without_island_area_or_wrong(islands):
-                continue
-            if river_compliant and len(islands) == self.island_count:
+            if river_compliant:
                 self._previous_solution = current_grid
                 return current_grid
 
-            if not river_compliant:
-                self._recompute_river(current_grid)
-            if len(islands) > self.island_count:
-                self._recompute_islands_without_island_area_or_wrong(islands)
-            if len(islands) < self.island_count:
-                self._exclude_solution(current_grid)
+            self._recompute_river(current_grid)
 
         return Grid.empty()
 
@@ -65,88 +56,94 @@ class NurikabeSolver(GameSolver):
         biggest_river = max(rivers, key=len)
         rivers.remove(biggest_river)
         for river in rivers:
-            not_all_cell_are_river = Not(And([self._grid_z3[position] for position in river]))
+            not_all_cell_are_river = Not(And([self._grid_z3[position] == 0 for position in river]))
             around_river = ShapeGenerator.around_shape(river)
-            around_river_are_not_all_island = Not(And([Not(self._grid_z3[position]) for position in around_river if position in self._grid]))
+            around_river_are_not_all_island = Not(And([self._grid_z3[position] > 0 for position in around_river if position in self._grid]))
             constraint = Or(not_all_cell_are_river, around_river_are_not_all_island)
             self._solver.add(constraint)
 
-    def _recompute_islands_without_island_area_or_wrong(self, islands):
-        result = False
-        for island in islands:
-            if all(self._grid[position] == 0 for position in island) or any((island_area := self._grid[position]) != 0 for position in island) and island_area != len(island):
-                black_around_shape = [position for position in ShapeGenerator.around_shape(island) if position in self._grid]
-                blacks = [self._grid_z3[position] for position in black_around_shape]
-                whites = [Not(self._grid_z3[position]) for position in island]
-                constraint_black_and_white = And(blacks + whites)
-                self._solver.add(Not(constraint_black_and_white))
-                result = True
-        return result
-
     def _add_constraints(self):
-        self._add_island_on_island_area_constraint()
-        self._add_islands_area_sum_constraint()
+        self._add_initial_constraints()
+        self._add_island_regions_constraints()
+        # self._add_river_region_constraint()
+        self._add_no_square_river_constraint()
+        self._add_river_around_islands()
         self._add_adjacent_1_is_river_constraint()
         self._add_river_between_2_island_area_constraint()
         self._add_river_if_2_island_area_diagonal_adjacent_constraint()
-        self._add_no_square_river_constraint()
-        self._add_islands_area_and_river_constraint()
-        self._add_river_if_all_neighbors_river_and_not_island_area()
 
-    def _add_island_on_island_area_constraint(self):
-        constraint = [Not(self._grid_z3[position]) for position in self.islands_area_position]
-        self._solver.add(constraint)
+    def _add_initial_constraints(self):
+        for r in range(self.rows_number):
+            for c in range(self.columns_number):
+                self._solver.add(self._grid_z3[r][c] >= 0)
+                self._solver.add(self._grid_z3[r][c] <= self.island_count)
+
+        constraints = [self._grid_z3[position] == i + 1 for i, position in enumerate(self.islands_size_position)]
+        self._solver.add(constraints)
 
     def _add_adjacent_1_is_river_constraint(self):
-        for river_values in [self._grid_z3.neighbors_values(position) for position in self.islands_area_position if self._grid[position] == 1]:
-            self._solver.add(river_values)
-
-    def _add_islands_area_sum_constraint(self):
-        islands_area_sum = sum(number for number in self.islands_area)
-        constraint = sum(Not(self._grid_z3[r][c]) for r in range(self.rows_number) for c in range(self.columns_number)) == islands_area_sum
-        self._solver.add(constraint)
+        for position in self.islands_size_position:
+            if self._grid[position] == 1:
+                for neighbor in self._grid.neighbors_positions(position):
+                    self._solver.add(self._grid_z3[neighbor] == 0)
 
     def _add_no_square_river_constraint(self):
         for r in range(self.rows_number - 1):
             for c in range(self.columns_number - 1):
                 if self._grid.value(r, c) == 0 and self._grid.value(r + 1, c) == 0 and self._grid.value(r, c + 1) == 0 and self._grid.value(r + 1, c + 1) == 0:
-                    self._solver.add(Not(And(self._grid_z3[r][c], self._grid_z3[r + 1][c], self._grid_z3[r][c + 1], self._grid_z3[r + 1][c + 1])))
+                    pos_r_c = Position(r, c)
+                    pos_r_c1 = Position(r, c + 1)
+                    pos_r1_c = Position(r + 1, c)
+                    pos_r1_c1 = Position(r + 1, c + 1)
+                    self._solver.add(Not(And(self._grid_z3[pos_r_c] == 0, self._grid_z3[pos_r_c1] == 0, self._grid_z3[pos_r1_c] == 0, self._grid_z3[pos_r1_c1] == 0)))
 
-    def _add_islands_area_and_river_constraint(self):
-        islands_possible_positions = self._constraint_islands_area()
-        self._constraint_must_be_river(islands_possible_positions)
+    def add_connected_cells_in_region_constraints(self, step, region_id):
+        self._solver.add(Sum([self._grid_z3[i][j] == region_id for i in range(self.rows_number) for j in range(self.columns_number)]) == self.islands_size[region_id - 1])
 
-    def _constraint_islands_area(self):  # todo improve
-        islands_possible_positions = set()
-        for initial_position in self.islands_area_position:
-            island_area = self._grid[initial_position]
-            island_possible_positions = set()
-            island_possible_positions.add(initial_position)
-            island_possible_positions = self._compute_possible_positions(island_possible_positions, initial_position, initial_position, island_area)
-            islands_possible_positions.update(island_possible_positions)
-            constraint_sum = sum(Not(self._grid_z3[pos]) for pos in island_possible_positions) >= island_area
-            self._solver.add(constraint_sum)
-        return islands_possible_positions
+        roots = []
+        for r in range(self.rows_number):
+            for c in range(self.columns_number):
+                roots.append(And(self._grid_z3[r][c] == region_id, step[r][c] == 1))
+        self._solver.add(Or(roots))
 
-    def _compute_possible_positions(self, possible_positions: set[Position], initial_position: Position, position: Position, island_area) -> Set[Position]:
-        area = len(position - initial_position)
-        if position != initial_position and self._grid[position] != 0 or area == island_area:
-            return possible_positions
-        adjacent_positions_to_add = {pos for pos in self._grid.neighbors_positions(position) if
-                                     self._grid[pos] == 0 and pos not in possible_positions and not self._is_adjacent_with_other_island_area(pos, position)}
-        if len(adjacent_positions_to_add) == 0:
-            return possible_positions
-        possible_positions.update(adjacent_positions_to_add)
-        for current_position in adjacent_positions_to_add:
-            possible_positions = self._compute_possible_positions(possible_positions, initial_position, current_position, island_area)
-        return possible_positions
+        for i in range(len(roots)):
+            for j in range(i + 1, len(roots)):
+                self._solver.add(Not(And(roots[i], roots[j])))
 
-    def _constraint_must_be_river(self, islands_possible_positions):
-        for _, river_value in ((position, river_value) for position, river_value in self._grid_z3 if position not in islands_possible_positions):
-            self._solver.add(river_value)
+        for r in range(self.rows_number):
+            for c in range(self.columns_number):
+                current_step = step[r][c]
+                self._solver.add(If(self._grid_z3[r][c] == region_id, current_step >= 1, current_step == 0))
+                adjacents = []
+                if r > 0:
+                    adjacents.append(And(self._grid_z3[r - 1][c] == region_id, step[r - 1][c] == current_step - 1))
+                if r < self.rows_number - 1:
+                    adjacents.append(And(self._grid_z3[r + 1][c] == region_id, step[r + 1][c] == current_step - 1))
+                if c > 0:
+                    adjacents.append(And(self._grid_z3[r][c - 1] == region_id, step[r][c - 1] == current_step - 1))
+                if c < self.columns_number - 1:
+                    adjacents.append(And(self._grid_z3[r][c + 1] == region_id, step[r][c + 1] == current_step - 1))
 
-    def _is_adjacent_with_other_island_area(self, position: Position, position_origin: Position):
-        return any([self._grid[adjacent_position] for adjacent_position in self._grid.neighbors_positions(position) if adjacent_position != position_origin]) > 0
+                self._solver.add(Implies(And(self._grid_z3[r][c] == region_id, current_step > 1), Or(adjacents)))
+
+    def _add_island_regions_constraints(self):
+        steps = [[[Int(f"step_{i}_{r}_{c}") for c in range(self.columns_number)] for r in range(self.rows_number)] for i in range(self.island_count)]
+        for index, step in enumerate(steps):
+            region_id = index + 1
+            self.add_connected_cells_in_region_constraints(step, region_id)
+
+    def _add_river_if_2_island_area_diagonal_adjacent_constraint(self):
+        for r in range(self.rows_number - 1):
+            for c in range(self.columns_number - 1):
+                if self._grid.value(r, c) > 0 and self._grid.value(r + 1, c + 1) > 0:
+                    self._solver.add(self._grid_z3[Position(r + 1, c)] == 0)
+                    self._solver.add(self._grid_z3[Position(r, c + 1)] == 0)
+
+        for r in range(self.rows_number - 1):
+            for c in range(1, self.columns_number):
+                if self._grid.value(r, c) > 0 and self._grid.value(r + 1, c - 1) > 0:
+                    self._solver.add(self._grid_z3[Position(r + 1, c)] == 0)
+                    self._solver.add(self._grid_z3[Position(r, c - 1)] == 0)
 
     def _add_river_between_2_island_area_constraint(self):
         for r in range(self.rows_number - 2):
@@ -155,24 +152,54 @@ class NurikabeSolver(GameSolver):
                 if self._grid[position] == 0:
                     continue
                 neighbors = [position.after(Direction.down(), 2), position.after(Direction.right(), 2)]
-                for river_value in [self._grid_z3[(neighbor_position + position) // 2] for neighbor_position in neighbors if self._grid[neighbor_position] != 0]:
-                    self._solver.add(river_value)
+                for neighbor_position in neighbors:
+                    if neighbor_position in self._grid and self._grid[neighbor_position] > 0:
+                        middle_position = (neighbor_position + position) // 2
+                        self._solver.add(self._grid_z3[middle_position] == 0)
 
-    def _add_river_if_2_island_area_diagonal_adjacent_constraint(self):
-        for r in range(self.rows_number - 1):
-            for c in range(self.columns_number - 1):
-                if self._grid.value(r, c) == 0 or self._grid.value(r + 1, c + 1) == 0:
-                    continue
-                self._solver.add(self._grid_z3[r + 1][c])
-                self._solver.add(self._grid_z3[r][c + 1])
+    def _add_river_region_constraint(self):
+        max_steps = self.rows_number * self.columns_number
+        river_step = [[Int(f"river_step_{r}_{c}") for c in range(self.columns_number)] for r in range(self.rows_number)]
 
-        for r in range(self.rows_number - 1):
-            for c in range(1, self.columns_number):
-                if self._grid.value(r, c) == 0 or self._grid.value(r + 1, c - 1) == 0:
-                    continue
-                self._solver.add(self._grid_z3[r + 1][c])
-                self._solver.add(self._grid_z3[r][c - 1])
+        for r in range(self.rows_number):
+            for c in range(self.columns_number):
+                pos = Position(r, c)
+                self._solver.add(Implies(self._grid_z3[pos] > 0, river_step[r][c] == 0))
 
-    def _add_river_if_all_neighbors_river_and_not_island_area(self):
-        for position, value in [(position, value) for position, value in self._grid_z3 if self._grid[position] == 0]:
-            Implies(And([self._grid_z3[neighbor_position] for neighbor_position in self._grid.neighbors_positions(position)]), self._grid_z3[position])
+        root_cells = []
+        for r in range(self.rows_number):
+            for c in range(self.columns_number):
+                pos = Position(r, c)
+                root_cells.append(And(self._grid_z3[pos] == 0, river_step[r][c] == 1))
+
+        self._solver.add(Or(root_cells))
+
+        for r in range(self.rows_number):
+            for c in range(self.columns_number):
+                pos = Position(r, c)
+
+                for step_value in range(2, max_steps + 1):
+                    adjacents = []
+                    for dr, dc in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+                        nr, nc = r + dr, c + dc
+                        if 0 <= nr < self.rows_number and 0 <= nc < self.columns_number:
+                            adj_pos = Position(nr, nc)
+                            adjacents.append(And(self._grid_z3[adj_pos] == 0, river_step[nr][nc] == step_value - 1))
+
+                    if adjacents:
+                        self._solver.add(Implies(And(self._grid_z3[pos] == 0, river_step[r][c] == step_value), Or(adjacents)))
+
+        for r in range(self.rows_number):
+            for c in range(self.columns_number):
+                pos = Position(r, c)
+                self._solver.add(Implies(self._grid_z3[pos] == 0, river_step[r][c] > 0))
+
+    def _is_adjacent_with_other_island_size(self, position: Position, position_origin: Position):
+        return any([self._grid[adjacent_position] for adjacent_position in self._grid.neighbors_positions(position) if adjacent_position != position_origin]) > 0
+
+    def _add_river_around_islands(self):
+        for i, position in enumerate(self.islands_size_position):
+            island_id = i + 1
+            adjacent_positions = self._grid.neighbors_positions(position)
+            for adjacent_position in adjacent_positions:
+                self._solver.add(Or(self._grid_z3[adjacent_position] == 0, self._grid_z3[adjacent_position] == island_id))
