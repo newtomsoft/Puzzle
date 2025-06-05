@@ -4,7 +4,6 @@ from Domain.Board.Direction import Direction
 from Domain.Board.Grid import Grid
 from Domain.Board.Position import Position
 from Domain.Puzzles.GameSolver import GameSolver
-from Utils.ShapeGenerator import ShapeGenerator
 
 
 class NurikabeSolver(GameSolver):
@@ -37,17 +36,6 @@ class NurikabeSolver(GameSolver):
         rivers_cells = self._previous_solution.get_all_shapes(1)
         self._solver.add(Not(And([self._grid_z3[river_cell] == 0 for river_cells in rivers_cells for river_cell in river_cells])))
         return self.get_solution()
-
-    def _recompute_river(self, grid):
-        rivers = grid.get_all_shapes(1)
-        biggest_river = max(rivers, key=len)
-        rivers.remove(biggest_river)
-        for river in rivers:
-            not_all_cell_are_river = Not(And([self._grid_z3[position] == 0 for position in river]))
-            around_river = ShapeGenerator.around_shape(river)
-            around_river_are_not_all_island = Not(And([self._grid_z3[position] > 0 for position in around_river if position in self._grid]))
-            constraint = Or(not_all_cell_are_river, around_river_are_not_all_island)
-            self._solver.add(constraint)
 
     def _add_constraints(self):
         self._add_initial_constraints()
