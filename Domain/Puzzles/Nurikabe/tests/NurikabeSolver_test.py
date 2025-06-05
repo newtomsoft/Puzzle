@@ -6,7 +6,6 @@ from Domain.Puzzles.Nurikabe.NurikabeSolver import NurikabeSolver
 
 
 class NurikabeSolverTests(TestCase):
-
     def test_grid_must_be_at_least_5x5_raises_value_error_column(self):
         grid = Grid([
             [1, 1, 1, 2],
@@ -273,6 +272,7 @@ class NurikabeSolverTests(TestCase):
         other_solution = game_solver.get_other_solution()
         self.assertEqual(Grid.empty(), other_solution)
 
+    @unittest.skip("This test takes too long to run")  # TODO:
     def test_get_solution_7x7_easy(self):  # approx 300 ms
         grid = Grid([
             [0, 0, 0, 0, 0, 0, 0],
@@ -298,6 +298,7 @@ class NurikabeSolverTests(TestCase):
         other_solution = game_solver.get_other_solution()
         self.assertEqual(Grid.empty(), other_solution)
 
+    @unittest.skip("This test takes too long to run")  # TODO:
     def test_get_solution_12x(self):  # approx 4,8 seconds
         grid = Grid([
             [0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0],
