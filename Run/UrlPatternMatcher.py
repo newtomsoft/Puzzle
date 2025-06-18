@@ -65,6 +65,7 @@ from GridPlayers.GridPuzzle.GridPuzzleSlitherlinkPlayer import GridPuzzleSlither
 from GridPlayers.GridPuzzle.GridPuzzleSnakePlayer import GridPuzzleSnakePlayer
 from GridPlayers.GridPuzzle.GridPuzzleStarBattlePlayer import GridPuzzleStarBattlePlayer
 from GridPlayers.GridPuzzle.GridPuzzleStr8tsPlayer import GridPuzzleStr8tsPlayer
+from GridPlayers.GridPuzzle.GridPuzzleTentsPlayer import GridPuzzleTentsPlayer # New Player Import
 from GridPlayers.LinkedIn.QueensPlayer import QueensPlayer
 from GridPlayers.LinkedIn.ZipPlayer import ZipPlayer
 from GridPlayers.PuzzleBaron.PuzzleBaronCalcudokuGridPlayer import PuzzleBaronCalcudokuPlayer
@@ -117,6 +118,7 @@ from GridProviders.GridPuzzle.GridPuzzleSlitherlinkGridProvider import GridPuzzl
 from GridProviders.GridPuzzle.GridPuzzleSnakeGridProvider import GridPuzzleSnakeGridProvider
 from GridProviders.GridPuzzle.GridPuzzleStarBattleGridProvider import GridPuzzleStarBattleGridProvider
 from GridProviders.GridPuzzle.GridPuzzleStr8tsGridProvider import GridPuzzleStr8tsGridProvider
+from GridProviders.GridPuzzle.GridPuzzleTentsGridProvider import GridPuzzleTentsGridProvider # New Provider Import
 from GridProviders.Linkedin.QueensGridProvider import QueensGridProvider
 from GridProviders.Linkedin.ZipGridProvider import ZipGridProvider
 from GridProviders.PlaySumplete.PlaySumpleteGridProvider import PlaySumpleteGridProvider
